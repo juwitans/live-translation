@@ -1,5 +1,5 @@
 import { AudioCapture } from './audio-capture';
-import { LiveClient, type ConnectionStatus, type Direction } from './live-client';
+import { LiveClient, type ConnectionStatus, type Direction, type KeySource } from './live-client';
 
 interface Segment {
   original: string;
@@ -27,39 +27,40 @@ let currentSegment: Segment | null = null;
 let autoScroll = true;
 let running = false;
 
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-if (!apiKey) {
-  showError(
-    'Missing API key: create a .env.local file with VITE_GEMINI_API_KEY=<your AI Studio key> and restart the dev server.'
-  );
-  startStopBtn.disabled = true;
-}
+// Local dev: set VITE_GEMINI_API_KEY in .env.local for a direct connection.
+// Production builds ALWAYS use the token endpoint (Netlify function at
+// /api/token minting single-use ephemeral tokens) — the dev-only guard here
+// keeps a key from .env.local from ever being baked into a deployed bundle.
+const apiKey = import.meta.env.DEV
+  ? (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)
+  : undefined;
+const keySource: KeySource = apiKey
+  ? { mode: 'api-key', apiKey }
+  : { mode: 'token-endpoint', url: '/api/token' };
 
 const capture = new AudioCapture();
-const client = apiKey
-  ? new LiveClient(apiKey, {
-      onStatus: setStatus,
-      onInputDelta: (text) => {
-        openSegmentIfNeeded();
-        currentSegment!.original += text;
-        currentSegment!.originalEl.textContent = currentSegment!.original;
-        scrollToBottom();
-      },
-      onOutputDelta: (text) => {
-        openSegmentIfNeeded();
-        if (currentSegment!.state === 'listening') setSegmentState(currentSegment!, 'translating');
-        currentSegment!.translated += text;
-        currentSegment!.translatedEl.textContent = currentSegment!.translated;
-        scrollToBottom();
-      },
-      onTurnComplete: () => {
-        if (currentSegment) {
-          setSegmentState(currentSegment, 'done');
-          currentSegment = null;
-        }
-      },
-    })
-  : null;
+const client = new LiveClient(keySource, {
+  onStatus: setStatus,
+  onInputDelta: (text) => {
+    openSegmentIfNeeded();
+    currentSegment!.original += text;
+    currentSegment!.originalEl.textContent = currentSegment!.original;
+    scrollToBottom();
+  },
+  onOutputDelta: (text) => {
+    openSegmentIfNeeded();
+    if (currentSegment!.state === 'listening') setSegmentState(currentSegment!, 'translating');
+    currentSegment!.translated += text;
+    currentSegment!.translatedEl.textContent = currentSegment!.translated;
+    scrollToBottom();
+  },
+  onTurnComplete: () => {
+    if (currentSegment) {
+      setSegmentState(currentSegment, 'done');
+      currentSegment = null;
+    }
+  },
+});
 
 // --- UI wiring ---
 
@@ -74,7 +75,7 @@ dirToggle.addEventListener('click', () => {
     setSegmentState(currentSegment, 'done');
     currentSegment = null;
   }
-  if (running) void client!.setDirection(direction);
+  if (running) void client.setDirection(direction);
 });
 
 clearBtn.addEventListener('click', () => {
@@ -117,14 +118,14 @@ transcriptEl.addEventListener('scroll', () => {
 async function start(): Promise<void> {
   hideError();
   try {
-    await client!.connect(direction);
+    await client.connect(direction);
   } catch {
     return; // status/error already surfaced by the client
   }
   try {
-    await capture.start((chunk) => client!.sendAudio(chunk));
+    await capture.start((chunk) => client.sendAudio(chunk));
   } catch (err) {
-    client!.close();
+    client.close();
     const denied = err instanceof DOMException && err.name === 'NotAllowedError';
     showError(
       denied
@@ -141,7 +142,7 @@ async function start(): Promise<void> {
 async function stop(): Promise<void> {
   running = false;
   await capture.stop();
-  client?.close();
+  client.close();
   if (currentSegment) {
     setSegmentState(currentSegment, 'done');
     currentSegment = null;

@@ -31,15 +31,32 @@ subtitles (Korean → English or English → Korean), powered by the Gemini Live
    and speak. Use the **KO → EN / EN → KO** button to switch direction (this restarts
    the session; the transcript is kept).
 
+## Deploying to Netlify (free)
+
+The repo includes a Netlify function (`netlify/functions/token.mts`) that mints
+single-use [ephemeral tokens](https://ai.google.dev/gemini-api/docs/ephemeral-tokens)
+at `/api/token`. When `VITE_GEMINI_API_KEY` is **not** set at build time, the app
+automatically fetches a token per connection instead — so the real key stays
+server-side.
+
+1. Push the repo to GitHub and [import it on Netlify](https://app.netlify.com/start)
+   (build settings are read from `netlify.toml`), or use the CLI:
+   `npm i -g netlify-cli && netlify deploy --prod`.
+2. In the Netlify dashboard → Site configuration → **Environment variables**, add
+   `GEMINI_API_KEY` = your AI Studio key. Do **not** add `VITE_GEMINI_API_KEY` —
+   that would bake the key into the public bundle.
+3. Redeploy. Open the site (HTTPS, so mic access works), press Start.
+
+To test the function locally: `netlify dev` (runs Vite + the function together;
+put `GEMINI_API_KEY` in `.env.local` for it and remove `VITE_GEMINI_API_KEY`).
+
 ## Notes & limitations (MVP)
 
 - **Chrome only** — relies on `AudioContext({ sampleRate: 16000 })` + AudioWorklet
   behavior that is untested on Safari/Firefox.
-- **API key in the browser**: the key from `.env.local` is inlined into the local dev
-  bundle. Fine for a local POC — do **not** deploy this as-is. The production path is
-  a tiny server that mints ephemeral tokens
-  (`ai.authTokens.create(...)`, see https://ai.google.dev/gemini-api/docs/ephemeral-tokens)
-  and hands them to the browser, which then connects with the token instead of a key.
+- **Local dev key**: with `npm run dev`, the `VITE_GEMINI_API_KEY` from `.env.local`
+  is inlined into the local bundle — fine on localhost, never set it on a deployed
+  build (use the Netlify function path above instead).
 - Translation arrives per utterance (after a pause), not word-by-word — that's the
   Live API's turn-based VAD model.
 - Free-tier concurrent-session quota is small; the app closes sessions cleanly on

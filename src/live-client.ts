@@ -13,6 +13,17 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 export type Direction = 'ko-en' | 'en-ko';
 export type ConnectionStatus = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'error';
 
+/**
+ * Where connection credentials come from:
+ * - 'api-key': a raw Gemini key, inlined at build time (local dev only).
+ * - 'token-endpoint': a server URL that mints single-use ephemeral tokens
+ *   (production — the real key stays server-side). Tokens are uses:1, so a
+ *   fresh one is fetched for every connect/reconnect.
+ */
+export type KeySource =
+  | { mode: 'api-key'; apiKey: string }
+  | { mode: 'token-endpoint'; url: string };
+
 export interface LiveClientEvents {
   onStatus: (status: ConnectionStatus, detail?: string) => void;
   /** Incremental original-language transcription of what the speaker said. */
@@ -34,7 +45,7 @@ const SYSTEM_INSTRUCTIONS: Record<Direction, string> = {
 };
 
 export class LiveClient {
-  private ai: GoogleGenAI;
+  private keySource: KeySource;
   private session: Session | null = null;
   private events: LiveClientEvents;
   private direction: Direction = 'ko-en';
@@ -44,9 +55,26 @@ export class LiveClient {
   private reconnectAttempts = 0;
   private connected = false;
 
-  constructor(apiKey: string, events: LiveClientEvents) {
-    this.ai = new GoogleGenAI({ apiKey });
+  constructor(keySource: KeySource, events: LiveClientEvents) {
+    this.keySource = keySource;
     this.events = events;
+  }
+
+  private async createClient(): Promise<GoogleGenAI> {
+    if (this.keySource.mode === 'api-key') {
+      return new GoogleGenAI({ apiKey: this.keySource.apiKey });
+    }
+    const res = await fetch(this.keySource.url, { method: 'POST' });
+    if (!res.ok) {
+      throw new Error(
+        `Token endpoint returned ${res.status}. When deployed, set GEMINI_API_KEY in the ` +
+          'Netlify dashboard; for local dev, set VITE_GEMINI_API_KEY in .env.local instead.'
+      );
+    }
+    const body = (await res.json()) as { token?: string };
+    if (!body.token) throw new Error('Token endpoint returned no token.');
+    // Ephemeral tokens require the v1alpha API surface.
+    return new GoogleGenAI({ apiKey: body.token, httpOptions: { apiVersion: 'v1alpha' } });
   }
 
   async connect(direction: Direction): Promise<void> {
@@ -60,6 +88,17 @@ export class LiveClient {
     this.setupCompleted = false;
     this.intentionalClose = false;
 
+    // Credential acquisition is kept outside the connect try/catch below so a
+    // failed token fetch surfaces as an error instead of triggering the
+    // TEXT→AUDIO modality fallback.
+    let ai: GoogleGenAI;
+    try {
+      ai = await this.createClient();
+    } catch (err) {
+      this.events.onStatus('error', err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+
     const config: Record<string, unknown> = {
       systemInstruction: SYSTEM_INSTRUCTIONS[this.direction],
       inputAudioTranscription: {},
@@ -72,7 +111,7 @@ export class LiveClient {
     }
 
     try {
-      this.session = await this.ai.live.connect({
+      this.session = await ai.live.connect({
         model: MODEL,
         config,
         callbacks: {
@@ -113,7 +152,7 @@ export class LiveClient {
     if (msg.goAway) {
       // Server is about to drop the connection (session/connection time limit).
       // Reconnect proactively; transcript state lives in the UI, nothing is lost.
-      void this.restart();
+      void this.restart().catch(() => {});
       return;
     }
 
@@ -143,7 +182,8 @@ export class LiveClient {
     // and retry with the AUDIO+transcription fallback.
     if (!this.setupCompleted && !this.useAudioFallback) {
       this.useAudioFallback = true;
-      void this.openSession();
+      // Errors surface via onStatus inside openSession; swallow the rejection.
+      void this.openSession().catch(() => {});
       return;
     }
 
@@ -151,7 +191,7 @@ export class LiveClient {
       this.reconnectAttempts++;
       const delay = 500 * 2 ** this.reconnectAttempts;
       this.events.onStatus('reconnecting', e.reason || undefined);
-      setTimeout(() => void this.openSession(), delay);
+      setTimeout(() => void this.openSession().catch(() => {}), delay);
     } else {
       this.events.onStatus('error', e.reason || 'connection lost');
     }
