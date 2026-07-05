@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Translation — KO ⇄ EN</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header id="statusbar">
+      <div class="left">
+        <span id="conn-dot" class="dot idle" title="idle"></span>
+        <span id="conn-label">idle</span>
+      </div>
+      <div class="center">
+        <button id="direction-toggle" title="Switch translation direction">
+          <span id="dir-label">KO → EN</span>
+        </button>
+      </div>
+      <div class="right">
+        <button id="save-txt" title="Download the transcript as a .txt file" disabled>Save .txt</button>
+        <button id="clear" title="Clear the transcript" disabled>Clear</button>
+        <button id="start-stop">Start</button>
+      </div>
+    </header>
+
+    <div id="error-banner" hidden></div>
+
+    <main id="transcript">
+      <p id="empty-hint">Press <strong>Start</strong> and speak. Original speech appears dim, the translation appears below it.</p>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
