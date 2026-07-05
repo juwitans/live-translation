@@ -1,31 +1,43 @@
 import { AudioCapture } from './audio-capture';
 import { LiveClient, type ConnectionStatus, type Direction, type KeySource } from './live-client';
 
-interface Segment {
+interface FinishedSegment {
+  time: string;
   original: string;
   translated: string;
-  state: 'listening' | 'translating' | 'done';
-  el: HTMLElement;
-  originalEl: HTMLElement;
-  translatedEl: HTMLElement;
 }
 
 const transcriptEl = document.getElementById('transcript')!;
+const columnEl = document.getElementById('column')!;
+const emptyState = document.getElementById('empty-state')!;
+const emptyTitleText = document.getElementById('empty-title-text')!;
 const emptyHint = document.getElementById('empty-hint')!;
-const connDot = document.getElementById('conn-dot')!;
+const liveIndicator = document.getElementById('live-indicator')!;
 const connLabel = document.getElementById('conn-label')!;
+const srcLangEl = document.getElementById('src-lang')!;
+const tgtLangEl = document.getElementById('tgt-lang')!;
 const dirToggle = document.getElementById('direction-toggle') as HTMLButtonElement;
-const dirLabel = document.getElementById('dir-label')!;
-const startStopBtn = document.getElementById('start-stop') as HTMLButtonElement;
+const fontDecBtn = document.getElementById('font-dec') as HTMLButtonElement;
+const fontIncBtn = document.getElementById('font-inc') as HTMLButtonElement;
+const autoScrollBtn = document.getElementById('autoscroll') as HTMLButtonElement;
 const saveTxtBtn = document.getElementById('save-txt') as HTMLButtonElement;
 const clearBtn = document.getElementById('clear') as HTMLButtonElement;
+const startStopBtn = document.getElementById('start-stop') as HTMLButtonElement;
+const micLabel = document.getElementById('mic-label')!;
+const micIconStart = document.getElementById('mic-icon-start')!;
+const micIconStop = document.getElementById('mic-icon-stop')!;
 const errorBanner = document.getElementById('error-banner')!;
+const partialEl = document.getElementById('partial')!;
+const partialSource = document.getElementById('partial-source')!;
+const partialTarget = document.getElementById('partial-target')!;
 
 let direction: Direction = 'ko-en';
-let segments: Segment[] = [];
-let currentSegment: Segment | null = null;
-let autoScroll = true;
 let running = false;
+let autoScroll = true;
+let fontScale = 1;
+let segments: FinishedSegment[] = [];
+let current: { time: string; original: string; translated: string } | null = null;
+let latestCard: { badgeEl: HTMLElement; dirLabel: string } | null = null;
 
 // Local dev: set VITE_GEMINI_API_KEY in .env.local for a direct connection.
 // Production builds ALWAYS use the token endpoint (Netlify function at
@@ -42,27 +54,19 @@ const capture = new AudioCapture();
 const client = new LiveClient(keySource, {
   onStatus: setStatus,
   onInputDelta: (text) => {
-    openSegmentIfNeeded();
-    currentSegment!.original += text;
-    currentSegment!.originalEl.textContent = currentSegment!.original;
-    scrollToBottom();
+    ensureCurrent();
+    current!.original += text;
+    renderPartial();
   },
   onOutputDelta: (text) => {
-    openSegmentIfNeeded();
-    if (currentSegment!.state === 'listening') setSegmentState(currentSegment!, 'translating');
-    currentSegment!.translated += text;
-    currentSegment!.translatedEl.textContent = currentSegment!.translated;
-    scrollToBottom();
+    ensureCurrent();
+    current!.translated += text;
+    renderPartial();
   },
-  onTurnComplete: () => {
-    if (currentSegment) {
-      setSegmentState(currentSegment, 'done');
-      currentSegment = null;
-    }
-  },
+  onTurnComplete: finalizeCurrent,
 });
 
-// --- UI wiring ---
+// --- Header controls ---
 
 startStopBtn.addEventListener('click', () => {
   void (running ? stop() : start());
@@ -70,25 +74,48 @@ startStopBtn.addEventListener('click', () => {
 
 dirToggle.addEventListener('click', () => {
   direction = direction === 'ko-en' ? 'en-ko' : 'ko-en';
-  dirLabel.textContent = direction === 'ko-en' ? 'KO → EN' : 'EN → KO';
-  if (currentSegment) {
-    setSegmentState(currentSegment, 'done');
-    currentSegment = null;
-  }
+  finalizeCurrent();
+  updateLanguageLabels();
   if (running) void client.setDirection(direction);
+});
+
+fontIncBtn.addEventListener('click', () => setFontScale(fontScale + 0.15));
+fontDecBtn.addEventListener('click', () => setFontScale(fontScale - 0.15));
+
+function setFontScale(scale: number): void {
+  fontScale = Math.min(1.6, Math.max(0.85, +scale.toFixed(2)));
+  document.documentElement.style.setProperty('--fs', String(fontScale));
+}
+
+autoScrollBtn.addEventListener('click', () => {
+  setAutoScroll(!autoScroll);
+  if (autoScroll) scrollToBottom();
+});
+
+function setAutoScroll(on: boolean): void {
+  autoScroll = on;
+  autoScrollBtn.classList.toggle('active', on);
+}
+
+transcriptEl.addEventListener('scroll', () => {
+  const nearBottom =
+    transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 60;
+  if (nearBottom !== autoScroll) setAutoScroll(nearBottom);
 });
 
 clearBtn.addEventListener('click', () => {
   segments = [];
-  currentSegment = null;
-  transcriptEl.querySelectorAll('.segment').forEach((el) => el.remove());
-  emptyHint.hidden = false;
-  updateTranscriptButtons();
+  current = null;
+  latestCard = null;
+  columnEl.querySelectorAll('.card:not(.partial)').forEach((el) => el.remove());
+  renderPartial();
 });
 
 saveTxtBtn.addEventListener('click', () => {
+  const all = current && (current.original || current.translated) ? [...segments, current] : segments;
   const lines: string[] = [];
-  for (const seg of segments) {
+  for (const seg of all) {
+    lines.push(`[${seg.time}]`);
     if (seg.original) lines.push(seg.original.trim());
     if (seg.translated) lines.push(seg.translated.trim());
     lines.push('');
@@ -103,17 +130,7 @@ saveTxtBtn.addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-function updateTranscriptButtons(): void {
-  const hasContent = segments.length > 0;
-  saveTxtBtn.disabled = !hasContent;
-  clearBtn.disabled = !hasContent;
-}
-
-transcriptEl.addEventListener('scroll', () => {
-  const nearBottom =
-    transcriptEl.scrollHeight - transcriptEl.scrollTop - transcriptEl.clientHeight < 60;
-  autoScroll = nearBottom;
-});
+// --- Start / stop ---
 
 async function start(): Promise<void> {
   hideError();
@@ -135,46 +152,165 @@ async function start(): Promise<void> {
     return;
   }
   running = true;
-  startStopBtn.textContent = 'Stop';
-  startStopBtn.classList.add('active');
+  updateMicButton();
+  renderPartial();
 }
 
 async function stop(): Promise<void> {
   running = false;
+  finalizeCurrent();
   await capture.stop();
   client.close();
-  if (currentSegment) {
-    setSegmentState(currentSegment, 'done');
-    currentSegment = null;
-  }
-  startStopBtn.textContent = 'Start';
-  startStopBtn.classList.remove('active');
+  updateMicButton();
+  renderPartial();
 }
 
-// --- Segment rendering ---
+function updateMicButton(): void {
+  startStopBtn.classList.toggle('active', running);
+  micLabel.textContent = running ? 'Stop' : 'Start';
+  micIconStart.hidden = running;
+  micIconStop.hidden = !running;
+}
 
-function openSegmentIfNeeded(): void {
-  if (currentSegment) return;
-  emptyHint.hidden = true;
+// --- Segments ---
 
-  const el = document.createElement('div');
-  el.className = 'segment listening';
-  const originalEl = document.createElement('div');
-  originalEl.className = 'original';
-  const translatedEl = document.createElement('div');
-  translatedEl.className = 'translated';
-  el.append(originalEl, translatedEl);
-  transcriptEl.appendChild(el);
+function ensureCurrent(): void {
+  if (current) return;
+  current = { time: timestamp(), original: '', translated: '' };
+}
 
-  currentSegment = { original: '', translated: '', state: 'listening', el, originalEl, translatedEl };
-  segments.push(currentSegment);
-  updateTranscriptButtons();
+function timestamp(): string {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function dirLabelOf(dir: Direction): string {
+  return dir === 'ko-en' ? 'KO → EN' : 'EN → KO';
+}
+
+function finalizeCurrent(): void {
+  if (!current) return;
+  if (!current.original && !current.translated) {
+    current = null;
+    return;
+  }
+  const seg: FinishedSegment = {
+    time: current.time,
+    original: current.original.trim(),
+    translated: current.translated.trim(),
+  };
+  segments.push(seg);
+  current = null;
+
+  // Demote the previous "new" badge to its direction label.
+  if (latestCard) {
+    latestCard.badgeEl.textContent = latestCard.dirLabel;
+    latestCard.badgeEl.classList.remove('new');
+  }
+  columnEl.querySelector('.card.latest')?.classList.remove('latest');
+
+  const card = buildCard(seg);
+  columnEl.insertBefore(card.el, partialEl);
+  latestCard = { badgeEl: card.badgeEl, dirLabel: dirLabelOf(direction) };
+
+  renderPartial();
   scrollToBottom();
 }
 
-function setSegmentState(segment: Segment, state: Segment['state']): void {
-  segment.state = state;
-  segment.el.className = `segment ${state}`;
+function buildCard(seg: FinishedSegment): { el: HTMLElement; badgeEl: HTMLElement } {
+  const el = document.createElement('div');
+  el.className = 'card latest';
+
+  const accent = document.createElement('span');
+  accent.className = 'accent';
+
+  const body = document.createElement('div');
+  body.className = 'body';
+
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+
+  const metaLeft = document.createElement('span');
+  metaLeft.className = 'meta-left';
+  const time = document.createElement('span');
+  time.className = 'time';
+  time.textContent = seg.time;
+  const badgeEl = document.createElement('span');
+  badgeEl.className = running ? 'badge new' : 'badge';
+  badgeEl.textContent = running ? 'new' : dirLabelOf(direction);
+  metaLeft.append(time, badgeEl);
+
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'copy-btn';
+  copyBtn.title = 'Copy translation';
+  copyBtn.innerHTML =
+    '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy</span>';
+  let revertTimer: ReturnType<typeof setTimeout> | undefined;
+  copyBtn.addEventListener('click', () => {
+    void navigator.clipboard?.writeText(seg.translated || seg.original).catch(() => {});
+    copyBtn.classList.add('copied');
+    copyBtn.querySelector('span')!.textContent = 'Copied';
+    clearTimeout(revertTimer);
+    revertTimer = setTimeout(() => {
+      copyBtn.classList.remove('copied');
+      copyBtn.querySelector('span')!.textContent = 'Copy';
+    }, 1600);
+  });
+
+  meta.append(metaLeft, copyBtn);
+
+  const source = document.createElement('p');
+  source.className = 'source';
+  source.textContent = seg.original;
+
+  const target = document.createElement('p');
+  target.className = `target ${direction === 'ko-en' ? 'lang-en' : 'lang-ko'}`;
+  target.textContent = seg.translated;
+
+  body.append(meta, source, target);
+  el.append(accent, body);
+  return { el, badgeEl };
+}
+
+// --- Partial card, empty state, button enablement ---
+
+function renderPartial(): void {
+  const koEn = direction === 'ko-en';
+  const hasCurrentText = !!current && !!(current.original || current.translated);
+  const hasAny = segments.length > 0 || hasCurrentText;
+
+  emptyState.hidden = hasAny;
+  emptyState.classList.toggle('running', running);
+  emptyTitleText.textContent = running
+    ? `Listening for ${koEn ? '한국어' : 'English'}`
+    : 'Ready to translate';
+  emptyHint.innerHTML = running
+    ? 'Start speaking and your words will appear here, translated in real time.'
+    : 'Press <strong>Start</strong>, allow the microphone, and begin speaking.';
+
+  partialEl.hidden = !(running && hasAny);
+  if (hasCurrentText) {
+    partialSource.classList.remove('placeholder');
+    partialSource.textContent = current!.original;
+    partialTarget.textContent = current!.translated;
+    partialTarget.className = `target ${koEn ? 'lang-en' : 'lang-ko'}`;
+  } else {
+    partialSource.classList.add('placeholder');
+    partialSource.textContent = koEn
+      ? '지금 말하는 내용을 듣고 있어요…'
+      : 'Listening to what you say now…';
+    partialTarget.textContent = '';
+  }
+
+  saveTxtBtn.disabled = !hasAny;
+  clearBtn.disabled = !hasAny;
+  if (hasCurrentText) scrollToBottom();
+}
+
+function updateLanguageLabels(): void {
+  const koEn = direction === 'ko-en';
+  srcLangEl.textContent = koEn ? '한국어' : 'English';
+  tgtLangEl.textContent = koEn ? 'English' : '한국어';
+  renderPartial();
 }
 
 function scrollToBottom(): void {
@@ -184,8 +320,15 @@ function scrollToBottom(): void {
 // --- Status & errors ---
 
 function setStatus(status: ConnectionStatus, detail?: string): void {
-  connDot.className = `dot ${status}`;
-  connLabel.textContent = status;
+  liveIndicator.className = status;
+  const labels: Record<ConnectionStatus, string> = {
+    idle: 'Paused',
+    connecting: 'Connecting…',
+    live: 'Live',
+    reconnecting: 'Reconnecting…',
+    error: 'Error',
+  };
+  connLabel.textContent = labels[status];
   if (status === 'error') {
     showError(detail ? `Connection error: ${detail}` : 'Connection error. Press Start to retry.');
     if (running) void stop();
@@ -200,3 +343,5 @@ function showError(message: string): void {
 function hideError(): void {
   errorBanner.hidden = true;
 }
+
+updateLanguageLabels();

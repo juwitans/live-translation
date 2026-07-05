@@ -4,30 +4,99 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Live Translation — KO ⇄ EN</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+KR:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <header id="statusbar">
-      <div class="left">
-        <span id="conn-dot" class="dot idle" title="idle"></span>
-        <span id="conn-label">idle</span>
+      <div id="live-indicator" class="idle">
+        <span class="live-dot-wrap">
+          <span class="live-ring"></span>
+          <span class="live-dot"></span>
+        </span>
+        <span id="conn-label">Paused</span>
       </div>
-      <div class="center">
-        <button id="direction-toggle" title="Switch translation direction">
-          <span id="dir-label">KO → EN</span>
+
+      <div class="lang-pill">
+        <span id="src-lang">한국어</span>
+        <button id="direction-toggle" title="Swap languages" aria-label="Swap languages">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3 4 7l4 4"/><path d="M4 7h13a4 4 0 0 1 4 4"/><path d="m16 21 4-4-4-4"/><path d="M20 17H7a4 4 0 0 1-4-4"/></svg>
         </button>
+        <span id="tgt-lang">English</span>
       </div>
-      <div class="right">
-        <button id="save-txt" title="Download the transcript as a .txt file" disabled>Save .txt</button>
-        <button id="clear" title="Clear the transcript" disabled>Clear</button>
-        <button id="start-stop">Start</button>
+
+      <div class="actions">
+        <div class="font-controls">
+          <button id="font-dec" title="Smaller text" class="font-a small">A</button>
+          <button id="font-inc" title="Larger text" class="font-a large">A</button>
+        </div>
+
+        <button id="autoscroll" class="pill-btn active" title="Auto-scroll">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+          Auto
+        </button>
+
+        <button id="save-txt" class="pill-btn" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+          Save
+        </button>
+
+        <button id="clear" class="pill-btn" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          Clear
+        </button>
+
+        <button id="start-stop" class="mic-btn">
+          <span id="mic-icon-start" class="mic-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/></svg>
+          </span>
+          <span id="mic-icon-stop" class="mic-icon" hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h4v12H6z"/><path d="M14 6h4v12h-4z"/></svg>
+          </span>
+          <span id="mic-label">Start</span>
+        </button>
       </div>
     </header>
 
     <div id="error-banner" hidden></div>
 
     <main id="transcript">
-      <p id="empty-hint">Press <strong>Start</strong> and speak. Original speech appears dim, the translation appears below it.</p>
+      <div id="column">
+        <div id="empty-state">
+          <div class="empty-mic">
+            <span class="empty-ring r1"></span>
+            <span class="empty-ring r2"></span>
+            <span class="empty-mic-circle">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/></svg>
+            </span>
+          </div>
+          <div class="empty-text">
+            <div class="empty-title">
+              <span id="empty-title-text">Ready to translate</span>
+              <span class="empty-dots">
+                <span></span><span></span><span></span>
+              </span>
+            </div>
+            <p id="empty-hint">Press <strong>Start</strong>, allow the microphone, and begin speaking.</p>
+          </div>
+        </div>
+
+        <div id="partial" class="card partial" hidden>
+          <span class="accent"></span>
+          <div class="body">
+            <div class="wave">
+              <span></span><span></span><span></span><span></span>
+            </div>
+            <p id="partial-source" class="source"></p>
+            <p id="partial-target" class="target"></p>
+          </div>
+        </div>
+      </div>
     </main>
 
     <script type="module" src="/src/main.ts"></script>
