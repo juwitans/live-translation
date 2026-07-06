@@ -31,6 +31,21 @@
       </div>
 
       <div class="actions">
+        <div class="source-seg" role="group" aria-label="Audio source">
+          <button id="src-mic" class="seg-btn active" aria-pressed="true" title="Translate microphone audio">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v5"/></svg>
+            Mic
+          </button>
+          <button id="src-system" class="seg-btn" aria-pressed="false" title="Translate system / tab audio (a Udemy video, Webex meeting…)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+            System
+          </button>
+          <button id="src-both" class="seg-btn" aria-pressed="false" title="Mix microphone + system audio (use headphones)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M8 8a4 4 0 0 0 0 8"/><path d="M16 8a4 4 0 0 1 0 8"/></svg>
+            Both
+          </button>
+        </div>
+
         <div class="font-controls">
           <button id="font-dec" title="Smaller text" class="font-a small">A</button>
           <button id="font-inc" title="Larger text" class="font-a large">A</button>

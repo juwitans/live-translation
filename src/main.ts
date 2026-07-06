@@ -1,4 +1,4 @@
-import { AudioCapture } from './audio-capture';
+import { AudioCapture, type AudioSource } from './audio-capture';
 import { LiveClient, type ConnectionStatus, type Direction, type KeySource } from './live-client';
 
 interface FinishedSegment {
@@ -27,11 +27,16 @@ const micLabel = document.getElementById('mic-label')!;
 const micIconStart = document.getElementById('mic-icon-start')!;
 const micIconStop = document.getElementById('mic-icon-stop')!;
 const errorBanner = document.getElementById('error-banner')!;
+const sourceSeg = document.querySelector('.source-seg') as HTMLElement;
+const srcMicBtn = document.getElementById('src-mic') as HTMLButtonElement;
+const srcSystemBtn = document.getElementById('src-system') as HTMLButtonElement;
+const srcBothBtn = document.getElementById('src-both') as HTMLButtonElement;
 const partialEl = document.getElementById('partial')!;
 const partialSource = document.getElementById('partial-source')!;
 const partialTarget = document.getElementById('partial-target')!;
 
 let direction: Direction = 'ko-en';
+let audioSource: AudioSource = 'mic';
 let running = false;
 let autoScroll = true;
 let fontScale = 1;
@@ -50,7 +55,13 @@ const keySource: KeySource = apiKey
   ? { mode: 'api-key', apiKey }
   : { mode: 'token-endpoint', url: '/api/token' };
 
-const capture = new AudioCapture();
+const capture = new AudioCapture({
+  onEnded: () => {
+    if (!running) return;
+    void stop();
+    showError('Screen sharing ended.');
+  },
+});
 const client = new LiveClient(keySource, {
   onStatus: setStatus,
   onInputDelta: (text) => {
@@ -78,6 +89,25 @@ dirToggle.addEventListener('click', () => {
   updateLanguageLabels();
   if (running) void client.setDirection(direction);
 });
+
+srcMicBtn.addEventListener('click', () => setAudioSource('mic'));
+srcSystemBtn.addEventListener('click', () => setAudioSource('system'));
+srcBothBtn.addEventListener('click', () => setAudioSource('both'));
+
+function setAudioSource(source: AudioSource): void {
+  if (running) return; // source is fixed for a running session
+  audioSource = source;
+  for (const [btn, val] of [
+    [srcMicBtn, 'mic'],
+    [srcSystemBtn, 'system'],
+    [srcBothBtn, 'both'],
+  ] as [HTMLButtonElement, AudioSource][]) {
+    const on = val === source;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
+  }
+  renderPartial();
+}
 
 fontIncBtn.addEventListener('click', () => setFontScale(fontScale + 0.15));
 fontDecBtn.addEventListener('click', () => setFontScale(fontScale - 0.15));
@@ -134,26 +164,43 @@ saveTxtBtn.addEventListener('click', () => {
 
 async function start(): Promise<void> {
   hideError();
+  // Acquire the media stream FIRST, inside the click gesture — getDisplayMedia needs
+  // transient user activation, which awaiting the socket connect would consume.
+  try {
+    await capture.acquire(audioSource);
+  } catch (err) {
+    showError(sourceErrorMessage(err));
+    return;
+  }
   try {
     await client.connect(direction);
   } catch {
+    capture.release();
     return; // status/error already surfaced by the client
   }
   try {
     await capture.start((chunk) => client.sendAudio(chunk));
   } catch (err) {
     client.close();
-    const denied = err instanceof DOMException && err.name === 'NotAllowedError';
-    showError(
-      denied
-        ? 'Microphone access was denied. Allow the microphone for this site in the browser address bar, then try again.'
-        : `Could not start the microphone: ${err instanceof Error ? err.message : String(err)}`
-    );
+    await capture.stop();
+    showError(`Could not start audio capture: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
   running = true;
   updateMicButton();
   renderPartial();
+}
+
+function sourceErrorMessage(err: unknown): string {
+  // User cancelled or the browser blocked the mic/screen prompt.
+  if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+    if (audioSource === 'mic') {
+      return 'Microphone access was denied. Allow the microphone for this site in the browser address bar, then try again.';
+    }
+    return 'Screen / tab-audio sharing was cancelled or blocked. Press Start and pick a tab or screen to capture.';
+  }
+  // e.g. the "No audio was shared" error thrown by AudioCapture.
+  return err instanceof Error ? err.message : String(err);
 }
 
 async function stop(): Promise<void> {
@@ -170,6 +217,8 @@ function updateMicButton(): void {
   micLabel.textContent = running ? 'Stop' : 'Start';
   micIconStart.hidden = running;
   micIconStop.hidden = !running;
+  sourceSeg.classList.toggle('locked', running);
+  for (const btn of [srcMicBtn, srcSystemBtn, srcBothBtn]) btn.disabled = running;
 }
 
 // --- Segments ---
@@ -283,9 +332,7 @@ function renderPartial(): void {
   emptyTitleText.textContent = running
     ? `Listening for ${koEn ? '한국어' : 'English'}`
     : 'Ready to translate';
-  emptyHint.innerHTML = running
-    ? 'Start speaking and your words will appear here, translated in real time.'
-    : 'Press <strong>Start</strong>, allow the microphone, and begin speaking.';
+  emptyHint.innerHTML = running ? runningHint() : idleHint();
 
   partialEl.hidden = !(running && hasAny);
   if (hasCurrentText) {
@@ -304,6 +351,28 @@ function renderPartial(): void {
   saveTxtBtn.disabled = !hasAny;
   clearBtn.disabled = !hasAny;
   if (hasCurrentText) scrollToBottom();
+}
+
+function idleHint(): string {
+  switch (audioSource) {
+    case 'system':
+      return 'Press <strong>Start</strong>, then pick the tab or screen to capture (tick “Share tab/system audio”).';
+    case 'both':
+      return 'Press <strong>Start</strong>, share a tab/screen, and speak — best with headphones.';
+    default:
+      return 'Press <strong>Start</strong>, allow the microphone, and begin speaking.';
+  }
+}
+
+function runningHint(): string {
+  switch (audioSource) {
+    case 'system':
+      return 'Play the video or meeting — its audio will appear here, translated in real time.';
+    case 'both':
+      return 'Captured audio and your voice will appear here, translated in real time.';
+    default:
+      return 'Start speaking and your words will appear here, translated in real time.';
+  }
 }
 
 function updateLanguageLabels(): void {

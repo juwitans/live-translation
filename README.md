@@ -3,10 +3,30 @@
 Web-based live captioning: speak into the microphone and see real-time translated
 subtitles (Korean → English or English → Korean), powered by the Gemini Live API.
 
+## Audio source — mic, system, or both
+
+Use the **Mic / System / Both** selector in the header (before pressing Start) to choose
+what gets translated:
+
+- **Mic** — the microphone (default).
+- **System** — audio playing on the machine, captured with `getDisplayMedia`. When you
+  press Start, Chrome asks what to share:
+  - **Udemy (or any browser video)**: pick the **Chrome Tab** playing it and tick
+    **“Share tab audio”**. The tab keeps playing to your speakers while it's captured.
+  - **Webex / a desktop app**: pick **Entire Screen** and tick **“Share system audio”**
+    (Windows Chrome only — see limitations).
+- **Both** — mixes mic + captured system audio into one stream, so a two-way call (you +
+  the other side) is fully translated. **Use headphones**, otherwise the mic re-hears the
+  speaker output and you get echoed/doubled captions.
+
+The source is fixed for a running session; press Stop, change it, and Start again to switch.
+
 ## How it works
 
-- The browser captures mic audio (`AudioWorklet`), converts it to 16-bit PCM @ 16 kHz,
-  and streams it over a Gemini Live API WebSocket session (`@google/genai`).
+- The browser captures the chosen audio source (mic via `getUserMedia`, and/or system/tab
+  audio via `getDisplayMedia`) through an `AudioWorklet`, mixes any sources together,
+  converts to 16-bit PCM @ 16 kHz, and streams it over a Gemini Live API WebSocket session
+  (`@google/genai`).
 - A system instruction tells the model to act as a simultaneous interpreter and output
   only the translation.
 - The Live API's automatic voice activity detection segments speech into utterances:
@@ -54,6 +74,12 @@ put `GEMINI_API_KEY` in `.env.local` for it and remove `VITE_GEMINI_API_KEY`).
 
 - **Chrome only** — relies on `AudioContext({ sampleRate: 16000 })` + AudioWorklet
   behavior that is untested on Safari/Firefox.
+- **System audio capture**: tab-audio sharing works cross-platform, but full **“Share
+  system audio”** for an entire-screen share (needed for desktop apps like the Webex
+  client) is **Windows Chrome only** — macOS Chrome can't capture system audio, though
+  tab-share still works there for Udemy and other browser content.
+- **Both mode**: without headphones the mic picks up the speaker output, producing echoed
+  or duplicated captions. Mic echo-cancellation reduces but doesn't eliminate this.
 - **Local dev key**: with `npm run dev`, the `VITE_GEMINI_API_KEY` from `.env.local`
   is inlined into the local bundle — fine on localhost, never set it on a deployed
   build (use the Netlify function path above instead).
